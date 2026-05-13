@@ -83,6 +83,11 @@ def init_db(conn):
         conn.execute("SELECT message_id FROM turns LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE turns ADD COLUMN message_id TEXT")
+    # Add cost_usd column if upgrading (Claude Code v2.1.97+ writes costUSD per record)
+    try:
+        conn.execute("ALTER TABLE turns ADD COLUMN cost_usd REAL")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     # Conditional unique index: only dedup non-null message IDs
     conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_message_id
@@ -181,6 +186,9 @@ def parse_jsonl_file(filepath):
                     if model:
                         session_meta[session_id]["model"] = model
 
+                    # costUSD: present in Claude Code v2.1.97+ JSONL; NULL otherwise
+                    cost_usd = record.get("costUSD")
+
                     turn = {
                         "session_id": session_id,
                         "timestamp": timestamp,
@@ -192,6 +200,7 @@ def parse_jsonl_file(filepath):
                         "tool_name": tool_name,
                         "cwd": cwd,
                         "message_id": message_id,
+                        "cost_usd": cost_usd,
                     }
 
                     # Dedup: last record per message_id wins (final usage tallies)
@@ -303,13 +312,15 @@ def insert_turns(conn, turns):
     conn.executemany("""
         INSERT OR IGNORE INTO turns
             (session_id, timestamp, model, input_tokens, output_tokens,
-             cache_read_tokens, cache_creation_tokens, tool_name, cwd, message_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             cache_read_tokens, cache_creation_tokens, tool_name, cwd,
+             message_id, cost_usd)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         (t["session_id"], t["timestamp"], t["model"],
          t["input_tokens"], t["output_tokens"],
          t["cache_read_tokens"], t["cache_creation_tokens"],
-         t["tool_name"], t["cwd"], t.get("message_id", ""))
+         t["tool_name"], t["cwd"], t.get("message_id", ""),
+         t.get("cost_usd"))
         for t in turns
     ])
 
@@ -443,6 +454,8 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                             if model:
                                 new_session_metas[session_id]["model"] = model
 
+                            cost_usd = record.get("costUSD")
+
                             turn = {
                                 "session_id": session_id,
                                 "timestamp": timestamp,
@@ -454,6 +467,7 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                                 "tool_name": tool_name,
                                 "cwd": cwd,
                                 "message_id": message_id,
+                                "cost_usd": cost_usd,
                             }
 
                             if message_id:
