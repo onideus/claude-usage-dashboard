@@ -1,128 +1,167 @@
-# Claude Code Usage Dashboard
+# CC Budget Dashboard
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![claude-code](https://img.shields.io/badge/claude--code-black?style=flat-square)](https://claude.ai/code)
 
-**Pro and Max subscribers get a progress bar. This gives you the full picture.**
+**Track your Claude Code API budget runway on a workday-pacing basis, locally and offline.**
 
-Claude Code writes detailed usage logs locally — token counts, models, sessions, projects — regardless of your plan. This dashboard reads those logs and turns them into charts and cost estimates. Works on API, Pro, and Max plans.
+A self-contained, single-localhost-port dashboard for developers who pay-as-they-go on the Anthropic API. Shows how much of your monthly budget you can spend today, how many workdays remain, and whether you're on pace, behind, or about to run dry.
 
-![Claude Usage Dashboard](docs/screenshot.png)
-
-**Created by:** [The Product Compass Newsletter](https://www.productcompass.pm)
+This is a fork of [phuryn/claude-usage](https://github.com/phuryn/claude-usage) — credit there for the original JSONL scanner. This fork keeps the scanner, drops the original "explore your usage" dashboard, and replaces it with a budget-focused one.
 
 ---
 
-## What this tracks
+## What it does
 
-Works on **API, Pro, and Max plans** — Claude Code writes local usage logs regardless of subscription type. This tool reads those logs and gives you visibility that Anthropic's UI doesn't provide.
+Claude Code writes a JSONL transcript for every session under `~/.claude/projects/`. Each assistant turn includes token usage, model, and — starting in Claude Code v2.1.97 — a precise `costUSD` field computed from the actual API response. This tool:
 
-Captures usage from:
-- **Claude Code CLI** (`claude` command in terminal)
-- **VS Code extension** (Claude Code sidebar)
-- **Dispatched Code sessions** (sessions routed through Claude Code)
+1. **Scans** those JSONL files into a local SQLite database (`~/.claude/usage.db`), incrementally and per-message-id deduplicated.
+2. **Serves** a single-page dashboard at `http://127.0.0.1:8099` that pages against the DB to answer one question: *what's my budget runway today?*
 
-**Not captured:**
-- **Cowork sessions** — these run server-side and do not write local JSONL transcripts
+Nothing leaves your machine. Chart.js is vendored — zero external requests at runtime.
 
 ---
 
-## Requirements
+## Prerequisites
 
-- Python 3.8+
-- No third-party packages — uses only the standard library (`sqlite3`, `http.server`, `json`, `pathlib`)
-
-> Anyone running Claude Code already has Python installed.
-
-## Quick Start
-
-No `pip install`, no virtual environment, no build step.
-
-### Windows
-```
-git clone https://github.com/phuryn/claude-usage
-cd claude-usage
-python cli.py dashboard
-```
-
-### macOS / Linux
-```
-git clone https://github.com/phuryn/claude-usage
-cd claude-usage
-python3 cli.py dashboard
-```
+- Python 3.8+ (only stdlib — no `pip install`, no virtual environment).
+- Claude Code v2.1.97+ for `costUSD` precision. Older sessions still work; the dashboard falls back to per-token pricing for any row that doesn't have `costUSD`.
 
 ---
 
-## Usage
+## Setup
 
-> On macOS/Linux, use `python3` instead of `python` in all commands below.
+```bash
+git clone <your-fork-url> cc-budget
+cd cc-budget
 
-```
-# Scan JSONL files and populate the database (~/.claude/usage.db)
+# Copy and edit the config (the server will auto-copy on first run if you skip this)
+cp budget_config.example.json budget_config.json
+# Open budget_config.json and set monthly_budget to your actual API budget.
+
+# Populate the database from your JSONL transcripts
 python cli.py scan
 
-# Show today's usage summary by model (in terminal)
-python cli.py today
-
-# Show the last 7 days (per-day breakdown + by-model totals)
-python cli.py week
-
-# Show all-time statistics (in terminal)
-python cli.py stats
-
-# Scan + open browser dashboard at http://localhost:8080
-python cli.py dashboard
-
-# Custom host and port via environment variables
-HOST=0.0.0.0 PORT=9000 python cli.py dashboard
-
-# Scan a custom projects directory
-python cli.py scan --projects-dir /path/to/transcripts
+# Start the dashboard
+python budget_dashboard.py
+# Then open http://127.0.0.1:8099
 ```
 
-The scanner is incremental — it tracks each file's path and modification time, so re-running `scan` is fast and only processes new or changed files.
+The server runs scan on every API request, so new Claude Code sessions appear within a few seconds without restarting.
 
-By default, the scanner checks both `~/.claude/projects/` and the Xcode Claude integration directory (`~/Library/Developer/Xcode/CodingAssistant/ClaudeAgentConfig/projects/`), skipping any that don't exist. Use `--projects-dir` to scan a custom location instead.
+### Config (`budget_config.json`)
 
----
+| Field | Default | Notes |
+|---|---|---|
+| `monthly_budget` | `500` | Your monthly API budget in `currency_symbol`. |
+| `port` | `8099` | Localhost port to bind. |
+| `db_path` | `~/.claude/usage.db` | SQLite path the scanner writes. |
+| `refresh_interval_seconds` | `30` | Auto-refresh cadence in the browser. |
+| `currency_symbol` | `$` | Display only — does not convert. |
 
-## How it works
-
-Claude Code writes one JSONL file per session to `~/.claude/projects/`. Each line is a JSON record; `assistant`-type records contain:
-- `message.usage.input_tokens` — raw prompt tokens
-- `message.usage.output_tokens` — generated tokens
-- `message.usage.cache_creation_input_tokens` — tokens written to prompt cache
-- `message.usage.cache_read_input_tokens` — tokens served from prompt cache
-- `message.model` — the model used (e.g. `claude-sonnet-4-6`)
-
-`scanner.py` parses those files and stores the data in a SQLite database at `~/.claude/usage.db`.
-
-`dashboard.py` serves a single-page dashboard on `localhost:8080` with Chart.js charts (loaded from CDN). It auto-refreshes every 30 seconds and supports model filtering with bookmarkable URLs. The bind address and port can be overridden with `HOST` and `PORT` environment variables (defaults: `localhost`, `8080`).
+`budget_config.json` is gitignored.
 
 ---
 
-## Cost estimates
+## How the workday math works
 
-Costs are calculated using **Anthropic API pricing as of April 2026** ([claude.com/pricing#api](https://claude.com/pricing#api)).
+The dashboard treats Mon–Fri as workdays and weekends as zero-spend buffer:
 
-**Only models whose name contains `opus`, `sonnet`, or `haiku` are included in cost calculations.** Local models, unknown models, and any other model names are excluded (shown as `n/a`).
+- `total_workdays` — count of Mon–Fri in the current calendar month
+- `workdays_elapsed` — Mon–Fri from the 1st through today (inclusive if today is a workday)
+- `workdays_remaining` — `max(1, total_workdays - workdays_elapsed)`
+- `daily_budget` — `(monthly_budget - month_to_date_spend) / workdays_remaining`
+- `todays_runway` — `daily_budget - today_spend`
 
-| Model | Input | Output | Cache Write | Cache Read |
-|-------|-------|--------|------------|-----------|
-| claude-opus-4-7 | $5.00/MTok | $25.00/MTok | $6.25/MTok | $0.50/MTok |
-| claude-opus-4-6 | $5.00/MTok | $25.00/MTok | $6.25/MTok | $0.50/MTok |
-| claude-sonnet-4-6 | $3.00/MTok | $15.00/MTok | $3.75/MTok | $0.30/MTok |
-| claude-haiku-4-5 | $1.00/MTok | $5.00/MTok | $1.25/MTok | $0.10/MTok |
+Weekend spend draws from the same monthly pool but adds nothing to the denominator. The intent is to give yourself room to ship hard on weekdays without blowing past month-end.
 
-> **Note:** These are API prices. If you use Claude Code via a Max or Pro subscription, your actual cost structure is different (subscription-based, not per-token).
+**Projection / surplus:**
+- `avg_workday_spend` — `month_to_date_spend / max(1, workdays_elapsed)`
+- `projected_month_end` — current MTD spend plus `avg_workday_spend × workdays_remaining`
+- `projected_surplus` — `monthly_budget - projected_month_end`
+- Status colours: **green** (surplus > $50) · **yellow** ($0–50) · **red** (< 0). When red, the dashboard computes a *dry date* — the workday at which cumulative spend at current pace exceeds the budget.
+
+The budget-pace bar shows MTD spend as a filled bar with a vertical marker at the expected position (`workdays_elapsed / total_workdays`). If the bar runs ahead of the marker, you're spending faster than pace.
 
 ---
 
-## Files
+## Calibration (optional)
 
-| File | Purpose |
-|------|---------|
-| `scanner.py` | Parses JSONL transcripts, writes to `~/.claude/usage.db` |
-| `dashboard.py` | HTTP server + single-page HTML/JS dashboard |
-| `cli.py` | `scan`, `today`, `stats`, `dashboard` commands |
+If you want the dashboard to know how much your local estimate drifts from Anthropic's actual invoiced amount, drop a `calibration.json` in the repo root:
+
+```json
+{
+  "calibrations": [
+    { "date": "2026-05-13", "actual_spend": 47.23, "local_estimate": 44.80 }
+  ]
+}
+```
+
+The dashboard averages drift across all entries and shows a small note under the budget-pace bar (e.g. *"Calibration: local estimates track 5.1% below invoice."*). It does **not** auto-apply a correction to displayed numbers — it's informational, so you can decide whether to adjust `monthly_budget` to account for the gap.
+
+`calibration.json` is gitignored.
+
+---
+
+## Layout
+
+| Section | What it shows |
+|---|---|
+| Header | "CC Budget Monitor" · month/year · pulsing refresh indicator that flashes on update |
+| Today's Runway gauge | Donut sized to fraction of daily budget remaining; green > 66% · yellow 33–66% · red < 33% |
+| Month Remaining gauge | Donut of % consumed; remaining dollars + workdays-left sublabel |
+| Stat cards | Daily Budget · Avg Daily Spend · Sessions this month · Projected Surplus (coloured, with dry-date sublabel when red) |
+| Daily Spend bar chart | One bar per day of the month — amber weekdays, dimmed weekends with red overlay on weekend spend, dashed line at the daily-budget threshold, today highlighted |
+| Model Breakdown | Horizontal bars per family (opus / sonnet / haiku) with cost and percentage |
+| Budget Pace bar | Filled bar = % consumed · vertical marker at expected position · calibration note when present |
+
+Auto-refresh fetches `/api/summary`, `/api/daily`, `/api/models` every `refresh_interval_seconds`. Each request triggers an incremental scan, so the dashboard stays current while you work.
+
+---
+
+## CLI
+
+The original CLI commands still work for terminal usage:
+
+```bash
+python cli.py scan      # Update the database from JSONL files
+python cli.py today     # Print today's usage by model
+python cli.py week      # Last 7 days
+python cli.py stats     # All-time totals
+```
+
+---
+
+## Privacy / security
+
+- Server binds to `127.0.0.1` only — not reachable on the LAN.
+- Chart.js is vendored under `public/vendor/chart.min.js` — no CDN.
+- No telemetry. No outbound HTTP. Your usage data stays in `~/.claude/usage.db`.
+
+---
+
+## File layout
+
+```
+cc-budget/
+  cli.py                       # scan / today / week / stats subcommands
+  scanner.py                   # JSONL → SQLite (with cost_usd column)
+  budget_dashboard.py          # HTTP server (stdlib only)
+  budget_config.example.json   # template — copy to budget_config.json
+  budget_config.json           # your settings (gitignored)
+  calibration.json             # optional invoice anchors (gitignored)
+  public/
+    index.html                 # single-page dashboard (inline CSS/JS)
+    vendor/
+      chart.min.js             # vendored Chart.js v4.5.1
+  tests/                       # scanner + cli unit tests
+  LICENSE                      # MIT
+```
+
+---
+
+## Credits / license
+
+- Upstream scanner & CLI: [phuryn/claude-usage](https://github.com/phuryn/claude-usage) (MIT)
+- Chart.js: [chartjs/Chart.js](https://github.com/chartjs/Chart.js) (MIT)
+- This fork: MIT, inherited from upstream.
