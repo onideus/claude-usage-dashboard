@@ -1,0 +1,7 @@
+{
+  "monthly_budget": 500,
+  "port": 8099,
+  "db_path": "~/.claude/usage.db",
+  "refresh_interval_seconds": 30,
+  "currency_symbol": "$"
+}
