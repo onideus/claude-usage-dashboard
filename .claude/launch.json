@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "claude-usage-dashboard",
+      "name": "cc-budget-dashboard",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["dashboard.py"],
-      "port": 8080
+      "runtimeArgs": ["budget_dashboard.py"],
+      "port": 8099
     }
   ]
 }
