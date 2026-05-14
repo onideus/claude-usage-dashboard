@@ -1,11 +1,13 @@
 """
-cli.py - Command-line interface for the Claude Code usage dashboard.
+cli.py - Command-line interface for the CC Budget Dashboard.
 
 Commands:
-  scan      - Scan JSONL files and update the database
-  today     - Print today's usage summary
-  stats     - Print all-time usage statistics
-  dashboard - Scan + open browser + start dashboard server
+  scan   - Scan JSONL files and update the database
+  today  - Print today's usage summary
+  week   - Print last 7 days
+  stats  - Print all-time usage statistics
+
+Dashboard: run `python budget_dashboard.py` directly.
 """
 
 import os
@@ -357,41 +359,19 @@ def cmd_stats():
     conn.close()
 
 
-def cmd_dashboard(projects_dir=None, host=None, port=None):
-    import webbrowser
-    import threading
-    import time
-
-    print("Running scan first...")
-    cmd_scan(projects_dir=projects_dir)
-
-    print("\nStarting dashboard server...")
-    from dashboard import serve
-
-    host = host or os.environ.get("HOST", "localhost")
-    port = int(port or os.environ.get("PORT", "8080"))
-
-    def open_browser():
-        time.sleep(1.0)
-        webbrowser.open(f"http://{host}:{port}")
-
-    t = threading.Thread(target=open_browser, daemon=True)
-    t.start()
-    serve(host=host, port=port)
-
-
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 USAGE = """
-Claude Code Usage Dashboard
+CC Budget Dashboard - CLI
 
 Usage:
   python cli.py scan [--projects-dir PATH]   Scan JSONL files and update database
   python cli.py today                        Show today's usage summary
   python cli.py week                         Show last 7 days (per-day + by-model)
   python cli.py stats                        Show all-time statistics
-  python cli.py dashboard [--projects-dir PATH] [--host HOST] [--port PORT]
-                                                 Scan + start dashboard
+
+  # Budget dashboard is run separately:
+  python budget_dashboard.py
 """
 
 COMMANDS = {
@@ -399,7 +379,6 @@ COMMANDS = {
     "today": cmd_today,
     "week": cmd_week,
     "stats": cmd_stats,
-    "dashboard": cmd_dashboard,
 }
 
 def parse_named_arg(args, flag):
@@ -418,13 +397,7 @@ if __name__ == "__main__":
     rest = sys.argv[2:]
     projects_dir = parse_named_arg(rest, "--projects-dir")
 
-    if command == "dashboard":
-        cmd_dashboard(
-            projects_dir=projects_dir,
-            host=parse_named_arg(rest, "--host"),
-            port=parse_named_arg(rest, "--port"),
-        )
-    elif command == "scan" and projects_dir:
+    if command == "scan" and projects_dir:
         cmd_scan(projects_dir=projects_dir)
     else:
         COMMANDS[command]()

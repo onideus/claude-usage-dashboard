@@ -1,2 +1,4 @@
 __pycache__/
 server.log
+budget_config.json
+calibration.json
