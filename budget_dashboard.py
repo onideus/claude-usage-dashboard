@@ -14,9 +14,19 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
 from datetime import date, datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+
+# Re-scan cache: the browser fires /api/summary, /api/daily, /api/models in
+# parallel every refresh cycle. Without coalescing, that's 3 sequential
+# `cli.py scan` invocations per cycle. A short TTL collapses bursts into a
+# single scan while keeping freshness within a few seconds.
+RESCAN_TTL_SECONDS = 5.0
+_rescan_lock = threading.Lock()
+_last_scan_at = 0.0  # time.monotonic() of the most recent completed scan
 
 # Pricing fallback for rows where costUSD wasn't recorded (pre-v2.1.97).
 # Kept in sync with cli.py's PRICING table.
@@ -380,14 +390,25 @@ def make_handler(cfg):
             self.wfile.write(data)
 
         def _rescan(self):
-            """Run cli.py scan in a subprocess so we pick up new sessions."""
-            try:
-                subprocess.run(
-                    [sys.executable, str(ROOT / "cli.py"), "scan"],
-                    capture_output=True, timeout=30, check=False,
-                )
-            except (subprocess.SubprocessError, OSError):
-                pass  # Scan failure shouldn't block the dashboard.
+            """Run cli.py scan in a subprocess, but coalesce bursts.
+
+            The browser fires three API requests in parallel every refresh
+            cycle. We only need one scan per cycle, so we skip the rescan if
+            another one finished within RESCAN_TTL_SECONDS. The lock prevents
+            two simultaneous scans when running under a threaded server.
+            """
+            global _last_scan_at
+            with _rescan_lock:
+                if time.monotonic() - _last_scan_at < RESCAN_TTL_SECONDS:
+                    return
+                try:
+                    subprocess.run(
+                        [sys.executable, str(ROOT / "cli.py"), "scan"],
+                        capture_output=True, timeout=30, check=False,
+                    )
+                except (subprocess.SubprocessError, OSError):
+                    pass  # Scan failure shouldn't block the dashboard.
+                _last_scan_at = time.monotonic()
 
         def do_GET(self):
             try:
