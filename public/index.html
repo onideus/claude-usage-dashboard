@@ -473,29 +473,30 @@
     renderGauge('runway-gauge', 'runway', pctOfDaily, color);
   }
 
-  // Month Remaining gauge: % of monthly budget consumed
+  // Month Remaining gauge: % of monthly budget still available
   function renderMonthGauge(s) {
     const consumedPct = (s.month_to_date_spend / s.monthly_budget) * 100;
+    const remainingPct = Math.max(0, 100 - consumedPct);
     const remaining = s.monthly_budget - s.month_to_date_spend;
 
     let color;
-    if (consumedPct < 50)      color = '#2dd4bf';
-    else if (consumedPct < 85) color = '#fbbf24';
-    else                       color = '#ef4444';
+    if (remainingPct > 50)      color = '#2dd4bf';
+    else if (remainingPct > 15) color = '#fbbf24';
+    else                        color = '#ef4444';
 
-    document.getElementById('month-pct').textContent = pct(consumedPct);
+    document.getElementById('month-pct').textContent = pct(remainingPct);
 
     const valEl = document.getElementById('month-value');
     valEl.textContent = money(remaining);
     valEl.className = 'gauge-value';
     if (remaining < 0) valEl.classList.add('negative');
-    else if (consumedPct >= 85) valEl.classList.add('warning');
+    else if (remainingPct <= 15) valEl.classList.add('warning');
     else valEl.classList.add('positive');
 
     document.getElementById('month-sub').textContent =
       s.workdays_remaining + ' workday' + (s.workdays_remaining === 1 ? '' : 's') + ' left';
 
-    renderGauge('month-gauge', 'month', consumedPct, color);
+    renderGauge('month-gauge', 'month', remainingPct, color);
   }
 
   // ── Stat cards ─────────────────────────────────────────────────────────────
@@ -652,7 +653,7 @@
     }
     const maxPct = Math.max(...models.map(m => m.percentage || 0), 0.001);
     container.innerHTML = models.map(m => {
-      const widthPct = Math.max(2, (m.percentage / maxPct) * 100);
+      const widthPct = m.percentage > 0 ? Math.max(2, (m.percentage / maxPct) * 100) : 0;
       return `
         <div class="model-row">
           <div class="model-name">${esc(m.model)}</div>
